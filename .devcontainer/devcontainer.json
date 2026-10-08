@@ -1,18 +1,19 @@
 {
   // GitHub Codespaces / VS Code Dev Containers: the full Docker stack in the cloud,
   // nothing installed on your own machine. Then run: docker compose up -d --build
+  //
+  // The universal image is Codespaces' default: Docker + Python preinstalled and
+  // cached on the hosts, so no extra features to build.
   "name": "ReviewLens",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
-  "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-  },
-  "hostRequirements": { "cpus": 4, "memory": "16gb", "storage": "32gb" },
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "hostRequirements": { "cpus": 4, "memory": "16gb" },
   "forwardPorts": [8080, 8501],
   "portsAttributes": {
     "8080": { "label": "Airflow", "onAutoForward": "notify" },
     "8501": { "label": "Dashboard", "onAutoForward": "openBrowser" }
   },
-  "postCreateCommand": "pip install -e '.[dev,stream]' && pytest -q --ignore=tests/spark",
+  // Non-fatal: the Docker stack doesn't need these; they're for running tests in the terminal.
+  "postCreateCommand": "pip install --user -e '.[dev,stream]' || true",
   "customizations": {
     "vscode": { "extensions": ["ms-python.python", "charliermarsh.ruff"] }
   }
