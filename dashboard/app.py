@@ -61,7 +61,8 @@ with right:
 
 st.subheader("Reviews per day")
 daily = health.groupby("review_date")["reviews"].sum().sort_index()
-st.line_chart(daily, y_label="Reviews", x_label="Date")
+daily.index = daily.index.astype(str)  # one bar per day, no hourly ticks
+st.bar_chart(daily, y_label="Reviews", x_label="Review date")
 
 with st.expander("Daily product health table"):
     st.dataframe(health.sort_values(["review_date", "product_id"], ascending=[False, True]),
