@@ -28,6 +28,7 @@ services:
   kafka:
     image: apache/kafka:4.3.1
     mem_limit: 768m
+    restart: unless-stopped
     ports: ["29092:29092"]           # for clients on your laptop (localhost:29092)
     environment:
       KAFKA_NODE_ID: 1
@@ -75,6 +76,7 @@ services:
   postgres:
     image: postgres:17-alpine
     mem_limit: 256m
+    restart: unless-stopped
     environment: {POSTGRES_USER: airflow, POSTGRES_PASSWORD: airflow, POSTGRES_DB: airflow}
     volumes: [postgres-data:/var/lib/postgresql/data]
     healthcheck:
