@@ -1,13 +1,6 @@
-"""LLM enrichment stage: review text -> structured insight.
+"""Review enrichment: sentiment, topics, actionable flag, summary.
 
-Design points (see docs/adr/0003-llm-enrichment.md):
-- The LLM is treated like any other unreliable upstream: schema-constrained
-  output, validation, retries, a dead-letter queue, and a circuit breaker.
-- Results are cached by (prompt_version, model, text_hash). Re-runs, backfills
-  and unchanged edits cost nothing; bumping PROMPT_VERSION re-enriches on purpose.
-- Only PII-redacted text is sent to the model.
-- A deterministic rule-based enricher runs locally/in CI and doubles as a
-  shadow baseline to detect model or prompt regressions.
+Enrichers: rules (default), ollama (local LLM), bedrock (Claude on AWS).
 """
 from __future__ import annotations
 
@@ -28,7 +21,7 @@ class ReviewInsight(BaseModel):
     sentiment: Literal["positive", "neutral", "negative", "mixed"]
     sentiment_score: float  # -1.0 .. 1.0
     topics: list[str]
-    is_actionable: bool  # does it describe a defect / service failure someone should fix?
+    is_actionable: bool  # describes a defect or service problem
     summary: str
 
     @field_validator("sentiment_score")
@@ -57,7 +50,6 @@ class Enricher(Protocol):
     def enrich(self, text: str, rating: int) -> ReviewInsight: ...
 
 
-# --------------------------------------------------------------------------- local / CI
 _KEYWORDS = {
     "battery": ["battery", "charging", "charge"],
     "build_quality": ["build", "quality", "premium", "cheap"],
@@ -100,11 +92,8 @@ class RuleBasedEnricher:
         )
 
 
-# --------------------------------------------------------------------------- free local LLM
 class OllamaEnricher:
-    """Free local model via Ollama (https://ollama.com). Install Ollama on the host, run
-    `ollama pull llama3.2:3b`, then set ENRICHER=ollama. Containers reach it at
-    http://host.docker.internal:11434. Slow on CPU - fine for a demo-sized stream."""
+    """Local LLM via Ollama. Needs `ollama pull llama3.2:3b` on the host and ENRICHER=ollama."""
 
     def __init__(self, model: str | None = None, url: str | None = None):
         self.model_id = model or os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
@@ -116,7 +105,7 @@ class OllamaEnricher:
         body = json.dumps({
             "model": self.model_id,
             "stream": False,
-            "format": _json_schema(),  # Ollama constrains the output to this schema
+            "format": _json_schema(),
             "options": {"temperature": 0},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -138,7 +127,6 @@ def make_enricher(kind: str | None = None) -> Enricher:
     return RuleBasedEnricher()
 
 
-# --------------------------------------------------------------------------- AWS (Bedrock, paid)
 SYSTEM_PROMPT = f"""You analyse customer product reviews for a retail analytics platform.
 Return the insight for the single review you are given.
 - sentiment: overall tone of the text, not the star rating. Use "mixed" when the text has
@@ -158,8 +146,7 @@ class ClaudeBedrockEnricher:
         from anthropic import AnthropicBedrockMantle, BetaRefusalFallbackMiddleware
 
         self.model_id = model_id or os.environ.get("REVIEWLENS_MODEL", "anthropic.claude-opus-5-5")
-        # If the primary model declines a request, retry it once on a fallback model
-        # instead of failing the record outright.
+        # retry refusals once on a fallback model
         self.client = AnthropicBedrockMantle(
             aws_region=region or os.environ.get("AWS_REGION", "us-east-1"),
             middleware=[BetaRefusalFallbackMiddleware([{"model": "anthropic.claude-opus-4-8"}])],
@@ -171,7 +158,7 @@ class ClaudeBedrockEnricher:
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             output_config={
-                "effort": "low",  # short classification task; low effort keeps cost and latency down
+                "effort": "low",  # simple classification
                 "format": {"type": "json_schema", "schema": _json_schema()},
             },
             messages=[{"role": "user", "content": f"Star rating: {rating}\nReview:\n{text}"}],
@@ -199,9 +186,8 @@ def _json_schema() -> dict:
     }
 
 
-# --------------------------------------------------------------------------- cache + runner
 class EnrichmentCache:
-    """File-backed locally; DynamoDB (pk = cache key, TTL 180d) in AWS."""
+    """JSON file cache (DynamoDB on AWS)."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -226,7 +212,7 @@ class EnrichmentCache:
 
 
 class CircuitOpen(RuntimeError):
-    """Raised when the failure rate says the model/prompt is broken, not the data."""
+    """Too many enrichment failures in one run."""
 
 
 def enrich_one(row: dict, enricher: Enricher, max_attempts: int) -> EnrichOutcome:
@@ -238,7 +224,7 @@ def enrich_one(row: dict, enricher: Enricher, max_attempts: int) -> EnrichOutcom
         except (ValidationError, json.JSONDecodeError, RuntimeError) as exc:
             error = f"{type(exc).__name__}:{exc}"[:200]
             if str(exc) == "model_refusal":
-                break  # deterministic; retrying will not help
+                break  # retrying won't help
     return EnrichOutcome(row["review_id"], None, error=error)
 
 
@@ -249,7 +235,7 @@ def enrich_rows(rows: list[dict], enricher: Enricher, cache: EnrichmentCache,
     failures = 0
     for row in rows:
         if row["is_deleted"]:
-            continue  # never spend tokens on tombstones
+            continue
         key = cache.key(enricher.model_id, row["text_hash"])
         hit = cache.get(key)
         if hit:
@@ -260,12 +246,12 @@ def enrich_rows(rows: list[dict], enricher: Enricher, cache: EnrichmentCache,
         if outcome.insight:
             cache.put(key, outcome.insight)
         else:
-            failures += 1  # goes to the DLQ table with its error
+            failures += 1
         outcomes.append(outcome)
 
         attempted = len(outcomes)
         if attempted >= min_sample and failures / attempted > max_failure_rate:
-            cache.flush()  # keep paid-for results
+            cache.flush()
             raise CircuitOpen(f"enrichment failure rate {failures}/{attempted} > {max_failure_rate:.0%}")
     cache.flush()
     return outcomes

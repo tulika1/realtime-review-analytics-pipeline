@@ -1,15 +1,6 @@
-"""Stage 2: bronze -> silver `reviews_current` (one row per review, SCD1).
+"""Bronze -> silver reviews_current (one row per review).
 
-Spark version of reviewlens.transform.to_silver (same rules, tested both ways):
-  1. parse + validate against the ReviewEvent v1 contract -> quarantine with reasons
-  2. drop redelivered event_ids
-  3. latest event per review_id by (event_time, event_id)
-  4. deletes become tombstones
-  5. PII redaction + text_hash before anything downstream sees the text
-  6. MERGE that only accepts strictly newer events -> idempotent and order-independent
-
-Reads bronze incrementally (Delta streaming source + availableNow), so each run
-only touches new rows, and a crashed run resumes from its checkpoint.
+Same rules as reviewlens.transform.to_silver; tests check both give the same result.
 
     python -m reviewlens.spark.bronze_to_silver
 """
@@ -38,7 +29,7 @@ PHONE_RE = r"\+?\d[\d\s().-]{7,}\d"
 
 
 def _bad(cond) -> F.Column:
-    """True when cond is false OR null (null-safe 'this check failed')."""
+    """cond is false or null."""
     return ~F.coalesce(cond, F.lit(False))
 
 
@@ -46,8 +37,7 @@ def parse_and_validate(bronze: DataFrame) -> DataFrame:
     """Adds `e` (parsed event), `event_ts` and `errors` (array; empty = valid)."""
     df = bronze.withColumn("e", F.from_json("payload", EVENT_SCHEMA))
     df = df.withColumn("event_ts", F.try_to_timestamp(F.col("e.event_time")))
-    # from_json (PERMISSIVE) turns broken JSON into a struct of nulls, not a null struct,
-    # so test the payload itself.
+    # from_json gives a struct of nulls (not null) for broken JSON, so check the payload
     checks = [(F.get_json_object("payload", "$").isNotNull(), "malformed_json")]
     for field in ["event_id", "review_id", "product_id", "customer_id", "review_text"]:
         checks.append((F.length(F.col(f"e.{field}")) > 0, f"missing:{field}"))
@@ -104,7 +94,7 @@ def process_batch(batch: DataFrame, batch_id: int, silver_path: str = SILVER,
         (bad.select("payload", "errors", "kafka_ts", "ingested_at",
                     F.lit(batch_id).alias("batch_id"))
          .write.format("delta").mode("append")
-         # Idempotent append: a retried micro-batch is not written twice.
+         # so a retried batch isn't appended twice
          .option("txnAppId", "bronze_to_silver_quarantine").option("txnVersion", batch_id)
          .save(quarantine_path))
     valid = parsed.filter(F.size("errors") == 0)

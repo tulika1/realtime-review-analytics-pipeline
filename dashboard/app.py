@@ -1,4 +1,4 @@
-"""ReviewLens dashboard: reads the published gold Delta tables (never silver/audit).
+"""Streamlit dashboard on the gold tables.
 
     streamlit run dashboard/app.py
 """

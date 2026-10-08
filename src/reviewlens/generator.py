@@ -1,9 +1,4 @@
-"""Synthetic review event producer.
-
-Deliberately emits the messy cases a real CDC/event stream produces, so the
-pipeline has something to prove: at-least-once duplicates, edits, deletes,
-late arrivals, contract violations and PII in free text.
-"""
+"""Fake review events, including duplicates, edits, deletes, late and invalid events."""
 from __future__ import annotations
 
 import random
@@ -71,22 +66,22 @@ def generate(n_reviews: int = 200, seed: int = 7, now: datetime | None = None) -
         events.append(ev)
 
         roll = rng.random()
-        if roll < 0.08:  # at-least-once delivery: exact redelivery of the same event
+        if roll < 0.08:  # duplicate delivery
             events.append(dict(ev))
-        elif roll < 0.14:  # customer edits the review later
+        elif roll < 0.14:  # edit
             events.append(_event(review_id, product_id, ev["customer_id"], min(5, rating + 1),
                                  text + " Update: it got better after a firmware patch.",
                                  t + timedelta(hours=2), "update"))
-        elif roll < 0.17:  # customer deletes the review (GDPR / change of mind)
+        elif roll < 0.17:  # delete
             events.append(_event(review_id, product_id, ev["customer_id"], rating, text,
                                  t + timedelta(hours=1), "delete"))
 
-    # Contract violations the quarantine must catch.
+    # invalid events
     bad = _event("R-BAD-1", "P-100", "C-0001", 9, "rating out of range", now, "create")
     missing = _event("R-BAD-2", "P-200", "C-0002", 3, "", now, "create")
     events += [bad, missing]
 
-    rng.shuffle(events)  # arrival order != event order
+    rng.shuffle(events)
     return events
 
 
@@ -99,16 +94,15 @@ def _new_review(rng: random.Random, review_id: str, now: datetime) -> dict:
 
 
 def stream_events(seed: int | None = None, clock=lambda: datetime.now(UTC)) -> Iterator[dict]:
-    """Endless event stream for the Kafka producer, with the same messy cases as generate():
-    redelivery, edits, deletes, late arrivals and the occasional contract violation."""
+    """Endless version of generate() for the Kafka producer."""
     rng = random.Random(seed)
-    prefix = uuid.UUID(int=rng.getrandbits(128)).hex[:6]  # unique per producer run
+    prefix = uuid.UUID(int=rng.getrandbits(128)).hex[:6]
     live: deque[dict] = deque(maxlen=5000)
     i = 0
     while True:
         now = clock()
         roll = rng.random()
-        if roll < 0.05 and live:  # at-least-once redelivery of an earlier event
+        if roll < 0.05 and live:  # duplicate delivery
             yield dict(rng.choice(live))
         elif roll < 0.12 and live:  # edit
             prev = rng.choice(live)
@@ -118,16 +112,16 @@ def stream_events(seed: int | None = None, clock=lambda: datetime.now(UTC)) -> I
                         now, "update")
             live.append(ev)
             yield ev
-        elif roll < 0.14 and live:  # delete (GDPR / change of mind)
+        elif roll < 0.14 and live:  # delete
             prev = rng.choice(live)
             yield _event(prev["review_id"], prev["product_id"], prev["customer_id"],
                          prev["rating"], prev["review_text"], now, "delete")
-        elif roll < 0.15:  # contract violation
+        elif roll < 0.15:  # invalid event
             yield _event(f"R-{prefix}-BAD{i}", "P-100", "C-0001", 9, "rating out of range",
                          now, "create")
         else:
             i += 1
-            # 5% of events were queued on a phone offline and arrive hours late
+            # some events arrive hours late
             t = now - timedelta(hours=rng.randint(1, 48)) if rng.random() < 0.05 else now
             ev = _new_review(rng, f"R-{prefix}-{i:06d}", t)
             live.append(ev)

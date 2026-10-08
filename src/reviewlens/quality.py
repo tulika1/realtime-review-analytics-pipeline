@@ -1,6 +1,4 @@
-"""Data-quality gates. A failed gate blocks publication to gold (write-audit-publish):
-consumers keep seeing yesterday's good data instead of today's bad data.
-"""
+"""Quality checks for the lite pipeline. Failing a 'block' check stops publishing."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +10,7 @@ class Check:
     passed: bool
     value: float
     threshold: str
-    severity: str  # "block" stops publish, "warn" only alerts
+    severity: str  # "block" or "warn"
 
 
 def run_checks(n_events: int, quarantine: int, silver: list[dict],
@@ -31,7 +29,7 @@ def run_checks(n_events: int, quarantine: int, silver: list[dict],
     coverage = len(enriched) / max(1, len(live))
     checks.append(Check("enrichment_coverage", coverage >= 0.95, coverage, ">= 95%", "block"))
 
-    # Semantic sanity check on the LLM: text sentiment should usually agree with stars.
+    # sentiment should mostly agree with the star rating
     rating = {r["review_id"]: r["rating"] for r in silver}
     agree = sum(
         1 for o in enriched
@@ -42,7 +40,7 @@ def run_checks(n_events: int, quarantine: int, silver: list[dict],
     agreement = agree / max(1, len(enriched))
     checks.append(Check("sentiment_rating_agreement", agreement >= 0.8, agreement, ">= 80%", "warn"))
 
-    # Shadow comparison against the deterministic baseline catches prompt/model drift.
+    # compare with the rules enricher to spot model/prompt drift
     if rule_baseline:
         same = sum(1 for o in enriched if rule_baseline.get(o.review_id) == o.insight.sentiment)
         overlap = same / max(1, len(enriched))

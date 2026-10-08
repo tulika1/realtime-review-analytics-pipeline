@@ -1,9 +1,4 @@
-"""Embeddings, vector index and question answering over reviews.
-
-Local: feature-hashing embedder + in-memory cosine index (no cost, no network).
-AWS:   Titan Text Embeddings v2 + Amazon S3 Vectors, answers from Claude on Bedrock.
-See docs/adr/0004-vector-store.md for why S3 Vectors over OpenSearch/pgvector.
-"""
+"""Simple embeddings + vector search over reviews (hashing embedder locally, Titan on AWS)."""
 from __future__ import annotations
 
 import hashlib

@@ -1,10 +1,6 @@
-"""End-to-end local run: generate -> bronze -> silver -> enrich -> quality gate -> gold -> RAG.
+"""Lite version of the pipeline in plain Python + DuckDB (no Docker/Spark). Used in CI.
 
-    python -m reviewlens.pipeline                 # fully local, zero cost
-    python -m reviewlens.pipeline --llm bedrock   # real Claude on Bedrock for enrichment
-
-The AWS deployment runs the same stages as Step Functions tasks
-(orchestration/state_machine.asl.json); only the I/O adapters change.
+    python -m reviewlens.pipeline
 """
 from __future__ import annotations
 
@@ -36,7 +32,6 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 def build_gold(con: duckdb.DuckDBPyConnection, silver_path: Path, enriched_path: Path) -> None:
-    # Same logic as dbt/models/marts/*.sql - kept in sync by tests in CI.
     con.execute(f"""
         CREATE OR REPLACE TABLE fct_review AS
         SELECT s.review_id, s.product_id, s.rating,
@@ -78,17 +73,17 @@ def run(llm: str = "local", n_reviews: int = 200, question: str | None = None) -
     if LAKE.exists():
         shutil.rmtree(LAKE)
 
-    # 1. Ingest -> bronze (append-only, raw, partitioned by ingest date)
+    # bronze
     events = generate(n_reviews)
     _write_jsonl(LAKE / "bronze" / "reviews" / f"ingest_date={run_id[:8]}" / f"{run_id}.jsonl", events)
 
-    # 2. Bronze -> silver (validate, dedup, latest-wins, redact)
+    # silver
     silver = to_silver(events)
     silver_path = LAKE / "silver" / "reviews_current.jsonl"
     _write_jsonl(silver_path, silver.rows)
     _write_jsonl(LAKE / "quarantine" / f"{run_id}.jsonl", silver.quarantine)
 
-    # 3. AI enrichment (cached, retried, DLQ, circuit breaker)
+    # enrichment
     if llm == "bedrock":
         from reviewlens.enrich import ClaudeBedrockEnricher
         enricher = ClaudeBedrockEnricher()
@@ -107,7 +102,7 @@ def run(llm: str = "local", n_reviews: int = 200, question: str | None = None) -
     _write_jsonl(LAKE / "dlq" / f"{run_id}.jsonl",
                  [{"review_id": o.review_id, "error": o.error} for o in outcomes if o.error])
 
-    # 4. Quality gate (write-audit-publish)
+    # quality checks
     baseline = None
     if llm != "local":
         rules = RuleBasedEnricher()
@@ -116,12 +111,12 @@ def run(llm: str = "local", n_reviews: int = 200, question: str | None = None) -
     checks = run_checks(len(events), len(silver.quarantine), silver.rows, outcomes, baseline)
     published = gate(checks)
 
-    # 5. Gold (only if the gate passed)
+    # gold, only if checks passed
     con = duckdb.connect(str(LAKE / "gold.duckdb"))
     if published:
         build_gold(con, silver_path, enriched_path)
 
-    # 6. Vector index for semantic search / RAG (tombstones are removed, not just filtered)
+    # search index
     embedder, index = HashingEmbedder(), LocalVectorIndex()
     by_id = {r["review_id"]: r for r in silver.rows}
     for row in silver.rows:

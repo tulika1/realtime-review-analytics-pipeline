@@ -1,12 +1,7 @@
-"""Bronze -> silver logic. Pure functions so they are unit-testable and
-identical to what the Glue/Spark job does (see glue/silver_job.py).
+"""Bronze -> silver in plain Python. Reference implementation for the Spark job.
 
-Silver = current state of each review (SCD1), built with:
-  1. contract validation  -> quarantine bad rows
-  2. event_id dedup       -> absorbs at-least-once redelivery
-  3. latest-wins per review_id by (event_time, event_id) -> deterministic under reordering
-  4. deletes become tombstones (kept for downstream propagation, filtered in gold)
-  5. deterministic PII redaction BEFORE any text leaves our account boundary
+Rules: validate, drop duplicate event_ids, keep the latest event per review,
+turn deletes into tombstones, redact PII.
 """
 from __future__ import annotations
 
@@ -37,11 +32,7 @@ class SilverResult:
 
 
 def to_silver(events: list[dict], existing: dict[str, dict] | None = None) -> SilverResult:
-    """Idempotent merge of a batch of events into the current silver state.
-
-    Re-running the same batch, or a batch overlapping a previous one, yields
-    the same output - the property that makes backfills and retries safe.
-    """
+    """Merge events into the current state. Safe to re-run with the same events."""
     state: dict[str, dict] = dict(existing or {})
     result = SilverResult()
     seen: set[str] = {r["last_event_id"] for r in state.values()}
@@ -63,7 +54,7 @@ def to_silver(events: list[dict], existing: dict[str, dict] | None = None) -> Si
         current = state.get(ev["review_id"])
         key = (parse_ts(ev["event_time"]), ev["event_id"])
         if current and (parse_ts(current["event_time"]), current["last_event_id"]) >= key:
-            continue  # late event older than what we already have: ignore for SCD1
+            continue  # older than what we have
         clean = redact_pii(ev["review_text"])
         state[ev["review_id"]] = {
             "review_id": ev["review_id"],

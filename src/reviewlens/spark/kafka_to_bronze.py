@@ -1,10 +1,4 @@
-"""Stage 1: Kafka topic -> bronze Delta table (raw, append-only).
-
-Structured Streaming with trigger(availableNow=True): each Airflow run reads every
-offset since the last checkpoint, writes it, and stops. We get streaming's
-exactly-once bookkeeping (offsets + Delta sink in one checkpoint) without paying
-for an always-on consumer. Payloads are stored as raw strings: bronze never
-rejects data, so a parsing bug can always be fixed by replaying bronze.
+"""Kafka -> bronze. Reads new offsets since the last checkpoint, writes raw payloads, stops.
 
     python -m reviewlens.spark.kafka_to_bronze
 """
@@ -24,7 +18,7 @@ def main() -> None:
         .option("kafka.bootstrap.servers", os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"))
         .option("subscribe", os.environ.get("KAFKA_TOPIC", "reviews.v1"))
         .option("startingOffsets", "earliest")
-        .option("maxOffsetsPerTrigger", 50_000)  # bounds memory on a big backlog
+        .option("maxOffsetsPerTrigger", 50_000)
         .load()
     )
     bronze = source.select(

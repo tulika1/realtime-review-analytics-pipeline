@@ -1,12 +1,4 @@
-"""Stage 4: gold marts with write-audit-publish.
-
-1. WRITE   all gold tables to gold_audit/
-2. AUDIT   run data-quality checks on the audit copies; record results in gold/_quality_runs
-3. PUBLISH overwrite gold/ only if every blocking check passed (a Delta overwrite is
-           atomic, so dashboard readers see either the old or the new version, never half)
-
-If a blocking check fails the task exits non-zero: Airflow marks it failed and
-alerts, and consumers keep the last good data.
+"""Gold tables. Written to gold_audit first, checked, then copied to gold if checks pass.
 
     python -m reviewlens.spark.gold
 """
@@ -40,14 +32,13 @@ class CheckResult:
 
 
 def build_tables(silver: DataFrame, enriched: DataFrame) -> dict[str, DataFrame]:
-    # Latest insight per (review, exact text) for the current prompt version.
     w = Window.partitionBy("review_id", "text_hash").orderBy(F.col("enriched_at").desc())
     current = (enriched.filter(F.col("prompt_version") == PROMPT_VERSION)
                .withColumn("_rn", F.row_number().over(w)).filter("_rn = 1").drop("_rn"))
 
     fct = (
-        silver.filter("NOT is_deleted")  # tombstones disappear from every mart here
-        .join(current, ["review_id", "text_hash"])  # never pair an insight with edited text
+        silver.filter("NOT is_deleted")
+        .join(current, ["review_id", "text_hash"])  # text_hash: skip insights for old text
         .select("review_id", "product_id", "rating", "event_ts",
                 F.to_date("event_ts").alias("review_date"),
                 "review_text_redacted", "sentiment", "sentiment_score", "topics",
@@ -107,14 +98,14 @@ def main() -> None:
     enriched = spark.read.format("delta").load(ENRICHED)
     live_count = silver.filter("NOT is_deleted").count()
 
-    # 1. WRITE to audit
+    # write
     for name, df in build_tables(silver, enriched).items():
         df.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
             .save(f"{GOLD_AUDIT}/{name}")
     audit = {name: spark.read.format("delta").load(f"{GOLD_AUDIT}/{name}")
              for name in ["fct_review", "mart_product_health_daily", "mart_topic_issues"]}
 
-    # 2. AUDIT
+    # audit
     checks = run_checks(spark, audit, live_count)
     publish = all(c.passed for c in checks if c.severity == "block")
     run_rows = [{**asdict(c), "value": float(c.value), "published": publish} for c in checks]
@@ -126,9 +117,9 @@ def main() -> None:
               f"{c.severity})", flush=True)
 
     if not publish:
-        raise SystemExit("quality gate failed: gold NOT published; consumers keep last good data")
+        raise SystemExit("quality checks failed, gold not published")
 
-    # 3. PUBLISH (atomic overwrite per table)
+    # publish
     for name, df in audit.items():
         df.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
             .save(f"{GOLD}/{name}")

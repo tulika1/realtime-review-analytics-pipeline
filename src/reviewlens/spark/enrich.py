@@ -1,9 +1,4 @@
-"""Stage 3: enrich new/changed live reviews (sentiment, topics, actionable, summary).
-
-Only rows whose (review_id, text_hash) has no insight for the current
-PROMPT_VERSION + model are processed (left-anti join), so re-runs, retries and
-rating-only edits cost nothing. The enricher runs inside mapInPandas: rules by
-default, a free local LLM with ENRICHER=ollama.
+"""Enrich live reviews that don't have an insight yet for the current prompt version.
 
     python -m reviewlens.spark.enrich
 """
@@ -35,7 +30,7 @@ MAX_FAILURE_RATE = 0.05
 
 
 def _enrich_partition(batches: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
-    enricher = make_enricher()  # one client per partition, not per row
+    enricher = make_enricher()
     for pdf in batches:
         out = []
         for row in pdf.to_dict("records"):
@@ -72,7 +67,7 @@ def main() -> None:
     ok = results.filter("error IS NULL").drop("error").withColumn("enriched_at", F.current_timestamp())
     failed = results.filter("error IS NOT NULL").withColumn("failed_at", F.current_timestamp())
 
-    # Keep paid-for / computed work even if the breaker trips below.
+    # save successes before possibly failing below
     ok.write.format("delta").mode("append").save(ENRICHED)
     n_failed = failed.count()
     if n_failed:
@@ -83,7 +78,6 @@ def main() -> None:
     print(f"enrich: {total} rows attempted, {total - n_failed} enriched, {n_failed} to DLQ "
           f"(model={model_id}, prompt={PROMPT_VERSION})", flush=True)
     if total >= 20 and n_failed / total > MAX_FAILURE_RATE:
-        # Systemic failure (model down, prompt broken): fail the task, alert, don't publish.
         raise SystemExit(f"circuit breaker: {n_failed}/{total} failed")
 
 

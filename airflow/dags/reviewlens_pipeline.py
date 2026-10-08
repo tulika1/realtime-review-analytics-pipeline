@@ -1,9 +1,4 @@
-"""ReviewLens: Kafka -> bronze -> silver -> AI enrichment -> gold (write-audit-publish).
-
-Every task is idempotent and checkpointed, so any run can be retried or cleared
-and re-run safely. max_active_runs=1 keeps a single Spark JVM on the laptop and
-avoids two runs merging into the same Delta tables at once.
-"""
+"""Kafka -> bronze -> silver -> enrich -> gold, every 15 minutes."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -37,7 +32,7 @@ def reviewlens_pipeline():
                        outlets=[Asset(f"{LAKE}/silver/reviews_current")])
     enrich = spark_job("enrich_reviews", "enrich",
                        outlets=[Asset(f"{LAKE}/silver/reviews_enriched")])
-    # Quality failures are not transient: don't retry, fail fast and alert.
+    # no retries: a failed quality check won't fix itself
     gold = spark_job("gold_write_audit_publish", "gold", retries=0,
                      outlets=[Asset(f"{LAKE}/gold/fct_review")])
 

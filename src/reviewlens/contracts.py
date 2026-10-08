@@ -1,8 +1,4 @@
-"""Data-contract validation at the bronze -> silver boundary.
-
-Invalid records are never dropped silently: they are routed to a quarantine
-table with the reason, so the producing team can be paged with evidence.
-"""
+"""Validation against the ReviewEvent v1 contract (contracts/review_event.v1.json)."""
 from __future__ import annotations
 
 import json

@@ -1,10 +1,6 @@
-"""Kafka producer: streams ReviewEvent v1 JSON to the `reviews.v1` topic.
+"""Sends fake review events to Kafka (topic reviews.v1, key = review_id).
 
     python -m reviewlens.producer --rate 2
-
-Key = review_id, so every event for one review lands in the same partition and
-keeps its order there. acks=all + idempotence avoids producer-side duplicates;
-the pipeline still assumes at-least-once and dedups downstream.
 """
 from __future__ import annotations
 
