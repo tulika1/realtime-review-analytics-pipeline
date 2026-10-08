@@ -32,6 +32,9 @@ flowchart LR
   GD --> D[Streamlit dashboard]
 ```
 
+![Airflow: four runs, every task green](docs/images/airflow.png)
+*Airflow 3: the `reviewlens_pipeline` DAG running every 15 minutes, with all four Spark tasks green across runs and an asset event for each layer it writes.*
+
 All tables are **Delta Lake** in a Docker volume. Spark runs in **local mode** inside the Airflow container, only while a task runs. That's how Kafka, Spark and Airflow fit on an 8 GB laptop ([ADR-0002](docs/adr/0002-airflow-spark-local-mode.md)).
 
 | Layer | Table | Guarantee |
