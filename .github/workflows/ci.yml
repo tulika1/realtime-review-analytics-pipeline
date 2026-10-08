@@ -5,8 +5,8 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: {python-version: "3.12"}
       - run: pip install -e ".[dev,stream]"
       - run: ruff check src tests dashboard airflow
@@ -17,18 +17,18 @@ jobs:
   spark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: "17"}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with: {python-version: "3.12"}
-      - run: pip install -e ".[dev,spark]"
+      - run: pip install -e ".[dev,spark]" pytest-github-actions-annotate-failures
       - name: Spark stage tests (silver MERGE idempotency, quarantine, parity with Python reference)
-        run: pytest -q tests/spark
+        run: pytest -q -rf --tb=short tests/spark
 
   compose:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: docker compose config -q
       - run: docker compose build
