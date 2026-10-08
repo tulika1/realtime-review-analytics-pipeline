@@ -46,7 +46,9 @@ def parse_and_validate(bronze: DataFrame) -> DataFrame:
     """Adds `e` (parsed event), `event_ts` and `errors` (array; empty = valid)."""
     df = bronze.withColumn("e", F.from_json("payload", EVENT_SCHEMA))
     df = df.withColumn("event_ts", F.try_to_timestamp(F.col("e.event_time")))
-    checks = [(F.col("e").isNotNull(), "malformed_json")]
+    # from_json (PERMISSIVE) turns broken JSON into a struct of nulls, not a null struct,
+    # so test the payload itself.
+    checks = [(F.get_json_object("payload", "$").isNotNull(), "malformed_json")]
     for field in ["event_id", "review_id", "product_id", "customer_id", "review_text"]:
         checks.append((F.length(F.col(f"e.{field}")) > 0, f"missing:{field}"))
     checks += [
