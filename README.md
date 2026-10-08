@@ -83,6 +83,14 @@ docker compose down                        # stop (data kept); add -v to wipe ev
 | Ownership | [SLOs and runbook](docs/ownership/slos-and-runbook.md) |
 | Path to production on AWS | [ADR-0006](docs/adr/0006-local-first-cloud-ready.md), reference design in [cloud/aws](cloud/aws) |
 
+## Quality gate in action
+
+Every run writes gold to an audit copy first and runs these checks on it. Gold is only published if all `block` checks pass. Results are kept in `gold/_quality_runs`:
+
+![Quality gate results from two live runs](docs/images/quality-gate.png)
+
+`contract_quarantine_rate` of 0.0075 means 0.75% of events broke the data contract and were quarantined, which is under the 2% limit, so the run published.
+
 ## Design decisions
 
 | ADR | Decision | Main trade-off |
