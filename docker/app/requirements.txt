@@ -1,0 +1,7 @@
+confluent-kafka==2.15.0
+deltalake==1.6.3
+pandas>=2.2
+pyarrow>=17
+pydantic>=2.7
+duckdb>=1.1
+streamlit==1.65.0

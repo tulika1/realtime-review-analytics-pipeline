@@ -1,0 +1,23 @@
+[project]
+name = "reviewlens"
+version = "0.2.0"
+description = "Streaming review analytics: Kafka -> Spark -> Delta Lake, orchestrated by Airflow"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.1",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+stream = ["confluent-kafka==2.15.0", "deltalake==1.6.3", "streamlit==1.65.0", "pandas>=2.2"]
+spark = ["pyspark==4.2.0", "delta-spark==4.4.0", "pandas>=2.2", "pyarrow>=17"]
+aws = ["anthropic>=0.70", "boto3>=1.35"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["cloud"]

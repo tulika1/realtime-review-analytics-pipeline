@@ -1,0 +1,90 @@
+{
+  "Comment": "ReviewLens 15-minute micro-batch. Triggered by EventBridge Scheduler with {ingest_date, run_id}. Every task is idempotent, so the whole execution can be retried or replayed for a backfill.",
+  "StartAt": "BronzeToSilver",
+  "States": {
+    "BronzeToSilver": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "reviewlens-silver",
+        "Arguments": {
+          "--ingest_date.$": "$.ingest_date",
+          "--bronze_path": "${bronze_path}",
+          "--warehouse": "${warehouse}",
+          "--quarantine_path": "${quarantine_path}"
+        }
+      },
+      "Retry": [{"ErrorEquals": ["Glue.ConcurrentRunsExceededException", "States.TaskFailed"], "IntervalSeconds": 60, "MaxAttempts": 2, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
+      "ResultPath": null,
+      "Next": "SelectRowsToEnrich"
+    },
+    "SelectRowsToEnrich": {
+      "Comment": "Athena query writes the changed, non-deleted rows whose (text_hash, prompt_version, model) has no cached insight to a manifest in S3.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "reviewlens-select-to-enrich", "Payload.$": "$"},
+      "ResultSelector": {"manifest.$": "$.Payload.manifest", "count.$": "$.Payload.count"},
+      "ResultPath": "$.to_enrich",
+      "Next": "EnrichInParallel"
+    },
+    "EnrichInParallel": {
+      "Comment": "Distributed Map over the manifest. MaxConcurrency is the Bedrock rate-limit / cost guard.",
+      "Type": "Map",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": {"InputType": "JSONL"},
+        "Parameters": {"Bucket": "${lake_bucket}", "Key.$": "$.to_enrich.manifest"}
+      },
+      "ItemBatcher": {"MaxItemsPerBatch": 50},
+      "MaxConcurrency": 10,
+      "ToleratedFailurePercentage": 5,
+      "ItemProcessor": {
+        "ProcessorConfig": {"Mode": "DISTRIBUTED", "ExecutionType": "STANDARD"},
+        "StartAt": "Enrich",
+        "States": {
+          "Enrich": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {"FunctionName": "reviewlens-enrich", "Payload.$": "$"},
+            "Retry": [{"ErrorEquals": ["ThrottlingException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 6, "BackoffRate": 2, "JitterStrategy": "FULL"}],
+            "End": true
+          }
+        }
+      },
+      "Catch": [{"ErrorEquals": ["States.ExceedToleratedFailureThreshold"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
+      "ResultPath": null,
+      "Next": "QualityGate"
+    },
+    "QualityGate": {
+      "Comment": "Write-audit-publish: dbt build runs models into a staging schema and runs tests; only on success is the gold schema swapped.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "reviewlens",
+        "TaskDefinition": "reviewlens-dbt",
+        "Overrides": {"ContainerOverrides": [{"Name": "dbt", "Command": ["dbt", "build", "--target", "audit"]}]}
+      },
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure"}],
+      "ResultPath": null,
+      "Next": "PublishAndIndex"
+    },
+    "PublishAndIndex": {
+      "Type": "Parallel",
+      "Branches": [
+        {"StartAt": "PublishGold", "States": {"PublishGold": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "reviewlens-publish-gold", "Payload.$": "$"}, "End": true}}},
+        {"StartAt": "SyncVectors", "States": {"SyncVectors": {"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "Parameters": {"FunctionName": "reviewlens-sync-vectors", "Payload.$": "$"}, "End": true}}}
+      ],
+      "ResultPath": null,
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {"TopicArn": "${alerts_topic_arn}", "Message.$": "States.JsonToString($)"},
+      "Next": "Failed"
+    },
+    "Failed": {"Type": "Fail"}
+  }
+}

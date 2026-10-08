@@ -1,0 +1,13 @@
+name: reviewlens
+version: "1.0"
+profile: reviewlens   # dbt-athena adapter; profiles.yml lives outside the repo
+model-paths: ["models"]
+
+models:
+  reviewlens:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+      +table_type: iceberg
+      +format: parquet

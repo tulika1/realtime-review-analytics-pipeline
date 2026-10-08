@@ -1,0 +1,7 @@
+pyspark==4.2.0
+delta-spark==4.4.0
+pandas>=2.2
+pyarrow>=17
+pydantic>=2.7
+duckdb>=1.1
+pytest>=8

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reviewlens/review_event/v1",
+  "title": "ReviewEvent",
+  "description": "Data contract between the Reviews service (producer) and the ReviewLens platform (consumer). Owner: reviews-platform team. Breaking changes require a new major version and a 30-day dual-publish window.",
+  "type": "object",
+  "required": ["event_id", "review_id", "product_id", "customer_id", "rating", "review_text", "event_time", "op", "schema_version"],
+  "additionalProperties": true,
+  "properties": {
+    "event_id":       {"type": "string", "description": "Unique per emitted event. Used for exactly-once dedup at bronze->silver."},
+    "review_id":      {"type": "string", "description": "Business key. A review can be created, edited, deleted."},
+    "product_id":     {"type": "string"},
+    "customer_id":    {"type": "string", "description": "Pseudonymous ID. Classified: internal."},
+    "rating":         {"type": "integer", "minimum": 1, "maximum": 5},
+    "review_text":    {"type": "string", "maxLength": 10000, "description": "Free text. May contain PII - classified: confidential until redacted."},
+    "event_time":     {"type": "string", "format": "date-time", "description": "When the action happened in the source system (UTC). Drives partitioning and late-data handling."},
+    "op":             {"type": "string", "enum": ["create", "update", "delete"]},
+    "schema_version": {"type": "string", "const": "1"}
+  },
+  "x-slo": {
+    "freshness_minutes": 30,
+    "completeness_pct": 99.5,
+    "max_late_arrival_hours": 72
+  }
+}

@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: fct_review
+    description: Live reviews joined to their current AI enrichment. Owner - reviews-platform.
+    config:
+      contract: {enforced: true}
+    columns:
+      - name: review_id
+        data_type: varchar
+        tests: [unique, not_null]
+      - name: product_id
+        data_type: varchar
+        tests: [not_null]
+      - name: rating
+        data_type: integer
+        tests:
+          - accepted_values: {values: [1, 2, 3, 4, 5], quote: false}
+      - name: event_ts
+        data_type: timestamp
+      - name: review_date
+        data_type: date
+      - name: sentiment
+        data_type: varchar
+        tests:
+          - accepted_values: {values: [positive, neutral, negative, mixed]}
+      - name: sentiment_score
+        data_type: double
+      - name: topics
+        data_type: array(varchar)
+      - name: is_actionable
+        data_type: boolean
+      - name: summary
+        data_type: varchar
+      - name: model_id
+        data_type: varchar
+        tests: [not_null]   # lineage: every insight is attributable to a model + prompt
+      - name: prompt_version
+        data_type: varchar
+        tests: [not_null]
+
+  - name: mart_product_health_daily
+    description: Daily product health KPIs for the product-quality dashboard (QuickSight).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [product_id, review_date]

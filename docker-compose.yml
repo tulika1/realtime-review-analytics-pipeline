@@ -1,0 +1,118 @@
+# ReviewLens local stack: Kafka -> Spark (via Airflow) -> Delta lake -> Streamlit.
+# Sized for an 8 GB laptop: ~3.5 GB for the containers at peak, Spark only while a task runs.
+#
+#   docker compose up -d --build      # first build ~10 min (downloads images + jars)
+#   Airflow   http://localhost:8080   # DAG: reviewlens_pipeline
+#   Dashboard http://localhost:8501
+#   docker compose down               # stop (data kept)   |  down -v  wipes the lake
+
+name: reviewlens
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__CORE__PARALLELISM: "2"                       # at most 2 tasks -> bounded Spark RAM
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"  # local dev only: no login screen
+  AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+  KAFKA_BOOTSTRAP: kafka:9092
+  KAFKA_TOPIC: reviews.v1
+  LAKE_PATH: /opt/lake
+  SPARK_DRIVER_MEMORY: 1g
+  ENRICHER: ${ENRICHER:-rules}                          # rules | ollama
+  OLLAMA_URL: http://host.docker.internal:11434
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    mem_limit: 768m
+    ports: ["29092:29092"]           # for clients on your laptop (localhost:29092)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller   # KRaft: no ZooKeeper
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"  # topics are created explicitly (kafka-init)
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+    volumes: [kafka-data:/var/lib/kafka/data]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on: {kafka: {condition: service_healthy}}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic reviews.v1 --partitions 3 --replication-factor 1
+    restart: "no"
+
+  producer:
+    build: {context: ., dockerfile: docker/app/Dockerfile}
+    image: reviewlens-app
+    mem_limit: 256m
+    command: ["python", "-m", "reviewlens.producer"]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      EVENTS_PER_SEC: ${EVENTS_PER_SEC:-2}
+    depends_on: {kafka-init: {condition: service_completed_successfully}}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    mem_limit: 256m
+    environment: {POSTGRES_USER: airflow, POSTGRES_PASSWORD: airflow, POSTGRES_DB: airflow}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  airflow:
+    build: {context: ., dockerfile: docker/airflow/Dockerfile}
+    image: reviewlens-airflow
+    mem_limit: 3g          # Airflow (~1.2 GB) + one Spark driver (1 GB heap) + headroom
+    command: standalone    # api-server + scheduler + dag-processor + triggerer in one container
+    ports: ["8080:8080"]
+    environment: *airflow-env
+    extra_hosts: ["host.docker.internal:host-gateway"]   # reach Ollama on the host
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/reviewlens/src          # live code edits without rebuilding
+      - ./tests:/opt/reviewlens/tests
+      - lake:/opt/lake
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+    restart: unless-stopped
+
+  dashboard:
+    build: {context: ., dockerfile: docker/app/Dockerfile}
+    image: reviewlens-app
+    mem_limit: 384m
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports: ["8501:8501"]
+    environment: {LAKE_PATH: /opt/lake}
+    volumes:
+      - ./dashboard:/opt/reviewlens/dashboard
+      - lake:/opt/lake:ro
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+  postgres-data:
+  lake:

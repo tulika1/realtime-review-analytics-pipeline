@@ -1,0 +1,34 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[dev,stream]"
+      - run: ruff check src tests dashboard airflow
+      - run: pytest -q --ignore=tests/spark
+      - name: Lite end-to-end run (no Docker, no Spark)
+        run: python -m reviewlens.pipeline
+
+  spark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[dev,spark]"
+      - name: Spark stage tests (silver MERGE idempotency, quarantine, parity with Python reference)
+        run: pytest -q tests/spark
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config -q
+      - run: docker compose build
