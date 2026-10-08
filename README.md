@@ -1,6 +1,6 @@
 # ReviewLens: streaming review analytics with Kafka, Spark, Delta Lake and Airflow
 
-![stack](https://img.shields.io/badge/stack-Kafka%20%7C%20Spark%204%20%7C%20Delta%20%7C%20Airflow%203-orange) ![cost](https://img.shields.io/badge/cost-%240%20(runs%20on%20a%20laptop)-brightgreen)
+[![ci](https://github.com/tulika1/realtime-review-analytics-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/tulika1/realtime-review-analytics-pipeline/actions/workflows/ci.yml) ![stack](https://img.shields.io/badge/stack-Kafka%20%7C%20Spark%204%20%7C%20Delta%20%7C%20Airflow%203-orange) ![cost](https://img.shields.io/badge/cost-%240%20(runs%20on%20a%20laptop)-brightgreen)
 
 ReviewLens turns a messy stream of customer review events into **trusted product-health metrics**: which products are getting worse, and why. It's an end-to-end pipeline that runs free with one `docker compose up` on an 8 GB laptop.
 
