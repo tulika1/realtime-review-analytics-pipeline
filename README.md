@@ -4,6 +4,9 @@
 
 ReviewLens turns a messy stream of customer review events into **trusted product-health metrics**: which products are getting worse, and why. It's an end-to-end pipeline that runs free with one `docker compose up` on an 8 GB laptop.
 
+![Dashboard on live pipeline data](docs/images/dashboard.png)
+*The Streamlit dashboard, reading the published gold tables after the pipeline streamed about 1,500 reviews through Kafka → Spark → Delta.*
+
 **The engineering focus** is what production pipelines need beyond moving data. It has an explicit data contract and quarantine for bad records. Duplicates, out-of-order events, late data and deletes are all handled. Re-running a step gives the same result, so retries are safe. Every stage keeps its place in a checkpoint. Results are only published if data-quality checks pass. And every major choice is written up with its trade-offs in [docs/adr](docs/adr).
 
 ## Architecture
